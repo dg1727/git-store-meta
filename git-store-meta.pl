@@ -48,7 +48,9 @@
 # =============================================================================
 
 use utf8;
+use warnings;
 use strict;
+use diagnostics;
 
 use Getopt::Long;
 Getopt::Long::Configure qw(gnu_getopt);
@@ -660,10 +662,10 @@ sub main {
       @fields = @cache_fields;
     }
     else {
-      push(@fields, ("file", "type"))
+      push(@fields, ("file", "type"));
       if (!$argv{'field'}) {
         # runs when $cache_header_valid is false (see enclosing "if")
-        foreach my $a_field ( keys %fields_used ) {
+        for my $a_field ( keys %fields_used ) {
           # Default to all fields.  
           push(@fields, $a_field);
         }
@@ -674,10 +676,10 @@ sub main {
     }
     # Next, use @fields to update %fields_used 
     for my $field (@fields) {
-        if (exists($fields_used{$field}) {  # && !$fields_used{$fields[$i]}){
+        if (exists($fields_used{$field})) {  # && !$fields_used{$fields[$i]}){
         # FIXME:  Apparently "&& !$fields_used{$fields[$i]}" isn't needed.  
         # If it is needed, hopefully a comment can be added to explain it.  
-            $fields_used{$field]} = 1;
+            $fields_used{$field} = 1;
             # push(@fields, $parts[$i]);
             # FIXME:  Originally there was a separate array called @parts.  
             # But this push() just set @fields equal to @parts, and this @parts 
@@ -732,7 +734,7 @@ sub main {
         }
     }
     elsif ($action eq "update") {
-      if (!argv{'quiet'}) {
+      if (!$argv{'quiet'}) {
         print "Updating metadata to '${git_store_meta_file}' ...\n";
       }
       # validate
@@ -758,7 +760,7 @@ Run --store to create new.\n";
 Fix it or run --store to create new.\n";
       }
       # do the update
-      print $field_info if (!argv{'quiet'});
+      print $field_info if (!$argv{'quiet'});
       # copy the cache file to the temp file
       # to prevent a conflict in further operation
       open(GIT_STORE_META_FILE, "<", $git_store_meta_file) or my_exit(
