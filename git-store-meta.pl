@@ -9,7 +9,7 @@
 #   -s, --store        store the metadata for all files
 #   -u, --update       update the metadata for changed files
 #   -a, --apply        apply the metadata stored in the data file to CWD
-#   -h, --help         print this help and exit
+#   -h, --help         print this help and exit (not subject to -q option) 
 #
 # Available OPTIONs are:
 #   -f, --field FIELDS fields to store or apply (see below). Default is to pick
@@ -17,6 +17,10 @@
 #   -d, --directory    also store, update, or apply for directories
 #   -n, --noexec       run a test and print the output, without real action
 #   -v, --verbose      apply with verbose output
+#   -q, --quiet        don't print anything on STDOUT 
+#       (given twice [such as -qq] = no STDERR either)
+#       (if both -v and -q are given, the one given last takes precedence) 
+#       (-n and -q can both be given, which might be used for testing) 
 #   -t, --target FILE  set another data file path
 #
 # FIELDS is a comma separated string combined with below values:
@@ -55,9 +59,11 @@ my $GIT_STORE_META_FILE      = ".git_store_meta";
 my $GIT                      = "git";
 
 # environment variables
-my $topdir = qx[$GIT rev-parse --show-cdup 2>/dev/null] || undef; chomp($topdir) if defined($topdir);
+my $topdir = qx[$GIT rev-parse --show-cdup 2>/dev/null] || undef;
+chomp($topdir) if defined($topdir);
 my $git_store_meta_file = $GIT_STORE_META_FILE;
-my $git_store_meta_header = join("\t", $GIT_STORE_META_PREFIX, $GIT_STORE_META_APP, $GIT_STORE_META_VERSION) . "\n";
+my $git_store_meta_header = join("\t", $GIT_STORE_META_PREFIX,
+                                 $GIT_STORE_META_APP, $GIT_STORE_META_VERSION) . "\n";
 my $script = __FILE__;
 my $temp_file = $git_store_meta_file . ".tmp" . time;
 
@@ -71,6 +77,7 @@ my %argv = (
     "directory"  => 0,
     "noexec"     => 0,
     "verbose"    => 0,
+    "quiet"      => 0,
     "target"     => "",
 );
 GetOptions(
@@ -81,11 +88,22 @@ GetOptions(
     "field|f=s",    \$argv{'field'},
     "directory|d",  \$argv{'directory'},
     "noexec|n",     \$argv{'noexec'},
-    "verbose|v",    \$argv{'verbose'},
+    "verbose|v",    sub{ $argv{'verbose'} = 1; $argv{'quiet'} = 0; },
+    "quiet|q",      sub{ if($argv{'quiet'} < 2) {$argv{'quiet'}++};
+                         $argv{'verbose'} = 0; },
     "target|t=s",   \$argv{'target'},
 );
 
 # -----------------------------------------------------------------------------
+
+sub my_exit {
+  if ($argv{'quiet'} >= 2) {
+    exit 1;
+  }
+  else {
+    die @_;
+  }
+}
 
 sub get_file_type {
     my ($file) = @_;
@@ -139,7 +157,9 @@ sub unescape_filename {
 # with "# " removed
 sub usage {
     my $start = 0;
-    open(GIT_STORE_META, "<", $script) or die;
+    # qx[chmod -r $script];  # for testing the following error message 
+    open(GIT_STORE_META, "<", $script) or my_exit(
+      "Unable to read the script file itself to extract help text:\n$script\n");
     while (my $line = <GIT_STORE_META>) {
         if ($line =~ m!^# ={2,}!) {
             if (!$start) { $start = 1; next; }
@@ -189,7 +209,8 @@ sub get_cache_header_info {
         close(GIT_STORE_META_FILE);
         $cache_header_valid = 1;
     };
-    return ($cache_file_exist, $cache_file_accessible, $cache_header_valid, $app, $version, \@fields);
+    return ($cache_file_exist, $cache_file_accessible, $cache_header_valid,
+            $app, $version, \@fields);
 }
 
 sub get_file_metadata {
@@ -199,13 +220,17 @@ sub get_file_metadata {
     my @rec;
     my $type = get_file_type($file);
     return @rec if !$type;  # skip unsupported "file" types
-    my ($dev, $ino, $mode, $nlink, $uid, $gid, $rdev, $size, $atime, $mtime, $ctime, $blksize, $blocks) = lstat($file);
+    my ($dev, $ino, $mode, $nlink, $uid, $gid, $rdev, $size, $atime, $mtime, 
+        $ctime, $blksize, $blocks) = lstat($file);
     my ($user) = getpwuid($uid);
     my ($group) = getgrgid($gid);
     $mtime = timestamp_to_gmtime($mtime);
     $atime = timestamp_to_gmtime($atime);
     $mode = sprintf("%04o", $mode & 07777);
-    $mode = "0664" if $type eq "l";  # symbolic do not apply mode, but use 0664 if checked out as a plain file
+
+    $mode = "0664" if $type eq "l";
+    # symlinks do not apply mode, but use 0664 if checked out as a plain file
+
     my $cmd = join(" ", ("getfacl", "-cE", escapeshellarg("./$file")));
     my $acl = qx[$cmd]; $acl =~ s/\n+$//; $acl =~ s/\n/,/g;
     my %data = (
@@ -232,24 +257,33 @@ sub store {
     my @fields = @{$fields};
 
     # read the file list and write retrieved metadata to a temp file
-    open(TEMP_FILE, ">", $temp_file) or die;
+    open(TEMP_FILE, ">", $temp_file) or my_exit(
+      "Unable to open temporary file '${temp_file}' for writing for --store.\n");
     list: {
         local $/ = "\0";
-        open(CMD, "$GIT ls-files -z |") or die;
-        while(<CMD>) { chomp; my $s = join("\t", get_file_metadata($_, \@fields)); print TEMP_FILE "$s\n" if $s; }
+        open(CMD, "$GIT ls-files -z |") or my_exit("'git ls-files' failed.\n");
+        while(<CMD>) { chomp;
+                       my $s = join("\t", get_file_metadata($_, \@fields));
+                       print TEMP_FILE "$s\n" if $s; }
         close(CMD);
         if ($argv{'directory'}) {
-            open(CMD, "$GIT ls-tree -rd --name-only -z \$($GIT write-tree) |") or die;
-            while(<CMD>) { chomp; my $s = join("\t", get_file_metadata($_, \@fields)); print TEMP_FILE "$s\n" if $s; }
+            open(CMD, "$GIT ls-tree -rd --name-only -z \$($GIT write-tree) |") or my_exit(
+              "'git ls-tree' failed when script was reading directory metadata.\n");
+            while(<CMD>) { chomp;
+                           my $s = join("\t", get_file_metadata($_, \@fields));
+                           print TEMP_FILE "$s\n" if $s; }
             close(CMD);
         }
     }
     close(TEMP_FILE);
 
     # output sorted entries
+    #   The caller uses Perl's select() to direct the output from this to a 
+    # file.  
     print $git_store_meta_header;
     print join("\t", map {"<" . $_ . ">"} @fields) . "\n";
-    open(CMD, "LC_COLLATE=C sort <'$temp_file' |") or die;
+    open(CMD, "LC_COLLATE=C sort <'$temp_file' |") or my_exit(
+      "Sorting of temporary file '${temp_file}' for '--store' failed.\n");
     while (<CMD>) { print; }
     close(CMD);
 
@@ -262,11 +296,13 @@ sub update {
     my @fields = @{$fields};
 
     # append new entries to the temp file
-    open(TEMP_FILE, ">>", $temp_file) or die;
+    open(TEMP_FILE, ">>", $temp_file) or my_exit(
+      "Appending to temporary file '${temp_file}' failed.\n");
     list: {
         local $/ = "\0";
         # go through the diff list and append entries
-        open(CMD, "$GIT diff --name-status --cached -z |") or die;
+        open(CMD, "$GIT diff --name-status --cached -z |") or my_exit(
+          "'git diff' failed.\n");
         while(my $stat = <CMD>) {
             chomp($stat);
             my $file = <CMD>;
@@ -288,7 +324,8 @@ sub update {
             else {
                 # a deleted file
                 print TEMP_FILE escape_filename($file)."\0\0D\0\n";
-                # parent directories also mark as deleted (temp and could be cancelled)
+                # parent directories also mark as deleted 
+                # (temp and could be cancelled) 
                 if ($argv{'directory'}) {
                     my @parts = split("/", $file);
                     pop(@parts);
@@ -303,13 +340,16 @@ sub update {
         close(CMD);
         # add all directories as a placeholder, which prevents deletion
         if ($argv{'directory'}) {
-            open(CMD, "$GIT ls-tree -rd --name-only -z \$($GIT write-tree) |") or die;
+            open(CMD, "$GIT ls-tree -rd --name-only -z \$($GIT write-tree) |") or my_exit(
+              "'git ls-tree' failed when script was adding directories as a placeholder.\n");
             while(<CMD>) { chomp; print TEMP_FILE "$_\0\1H\0\n"; }
             close(CMD);
         }
         # update $git_store_meta_file if it's in the git working tree
         check_meta_file: {
-            my $cmd = join(" ", ($GIT, "ls-files", "--error-unmatch", "-z", "--", escapeshellarg($git_store_meta_file), "2>&1"));
+            my $cmd = join(" ", ($GIT, "ls-files", "--error-unmatch", "-z",
+                                 "--", escapeshellarg($git_store_meta_file),
+                                 "2>&1"));
             my $file = qx[$cmd];
             if ($? == 0) {
                 chomp($file);
@@ -320,17 +360,20 @@ sub update {
     close(TEMP_FILE);
 
     # output sorted entries
+    #   The caller uses Perl's select() to direct the output from this to a 
+    # file.  
     print $git_store_meta_header;
     print join("\t", map {"<" . $_ . ">"} @fields) . "\n";
     my $cur_line = "";
     my $cur_file = "";
     my $cur_stat = "";
     my $last_file = "";
-    open(CMD, "LC_COLLATE=C sort <'$temp_file' |") or die;
+    open(CMD, "LC_COLLATE=C sort <'$temp_file' |") or my_exit(
+      "Sorting of temporary file '${temp_file}' for '--update' failed.\n");
     # Since sorted, same paths are grouped together, with the changed entries
     # sorted prior.
-    # We print the first seen entry and skip subsequent entries with a same
-    # path, so that the original entry is overwritten.
+    #   We print the first seen entry and skip subsequent entries that have the 
+    # same path, so that the original entry is overwritten.  
     while ($cur_line = <CMD>) {
         chomp($cur_line);
         if ($cur_line =~ m!\x00[\x00-\x02]+(\w+)\x00!) {
@@ -360,7 +403,9 @@ sub update {
         if ($cur_file ne $last_file) {
             if ($cur_stat eq "M") {
                 # a modify => retrieve file metadata to print
-                my $s = join("\t", get_file_metadata(unescape_filename($cur_file), \@fields));
+                my $s = join("\t",
+                             get_file_metadata(unescape_filename($cur_file),
+                                               \@fields));
                 $cur_line = $s ? "$s\n" : "";
             }
             print $cur_line;
@@ -371,179 +416,208 @@ sub update {
 }
 
 sub apply {
-    my ($fields_used, $cache_fields, $version) = @_;
-    my %fields_used = %{$fields_used};
-    my @cache_fields = @{$cache_fields};
+  my ($fields_used, $cache_fields, $version) = @_;
+  my %fields_used = %{$fields_used};
+  my @cache_fields = @{$cache_fields};
 
-    # 1.2.*, 1.1.*, and 1.0.* share same apply procedure
-    # (files with a bad file name recorded in 1.0.* will be skipped)
-    if ($version =~ m!^1\.2\..+$! || $version =~ m!^1\.1\..+$! || $version =~ m!^1\.0\..+$!) {
-        my $count = 0;
-        open(GIT_STORE_META_FILE, "<", $git_store_meta_file) or die;
-        while (my $line = <GIT_STORE_META_FILE>) {
-            ++$count <= 2 && next;  # skip first 2 lines (header)
-            $line =~ s/^\s+//; $line =~ s/\s+$//;
-            next if $line eq "";
+  # 1.2.*, 1.1.*, and 1.0.* share same apply procedure
+  # (files with a bad file name recorded in 1.0.* will be skipped)
+  if (!($version =~ m!^1\.2\..+$! ||
+        $version =~ m!^1\.1\..+$! ||
+        $version =~ m!^1\.0\..+$!)) {
+    my_exit "Error:  current cache uses an unsupported schema, version $version\n";
+  }
+  else {
+    my $count = 0;
+    open(GIT_STORE_META_FILE, "<", $git_store_meta_file) or my_exit(
+      "Unable to open file '${git_store_meta_file}' for reading for --apply.\n");
+    while (my $line = <GIT_STORE_META_FILE>) {
+      ++$count <= 2 && next;  # skip first 2 lines (header)
+      $line =~ s/^\s+//; $line =~ s/\s+$//;
+      next if $line eq "";
 
-            # for each line, parse the record
-            my @rec = split("\t", $line);
-            my %data;
-            for (my $i=0; $i<=$#cache_fields; $i++) {
-                $data{$cache_fields[$i]} = $rec[$i];
-            }
+      # for each line, parse the record
+      my @rec = split("\t", $line);
+      my %data;
+      for (my $i=0; $i<=$#cache_fields; $i++) {
+        $data{$cache_fields[$i]} = $rec[$i];
+      }
 
-            # check for existence and type
-            my $File = $data{'file'};  # escaped version, for printing
-            my $file = unescape_filename($File);  # unescaped version, for using
-            if (! -e $file && ! -l $file) {  # -e tests symlink target instead of the symlink itself
-                warn "warn: '$File' does not exist, skip applying metadata\n";
-                next;
-            }
-            my $type = $data{'type'};
-            # a symbolic in git could be checked out as a plain file, simply see them as equal
-            if ($type eq "f" || $type eq "l" ) {
-                if (! -f $file && ! -l $file) {
-                    warn "warn: '$File' is not a file, skip applying metadata\n";
-                    next;
-                }
-            }
-            elsif ($type eq "d") {
-                if (! -d $file) {
-                    warn "warn: '$File' is not a directory, skip applying metadata\n";
-                    next;
-                }
-                if (!$argv{'directory'}) {
-                    next;
-                }
-            }
-            else {
-                warn "warn: '$File' is recorded as an unknown type, skip applying metadata\n";
-                next;
-            }
-
-            # apply metadata
-            my $check = 0;
-            set_user: {
-                if ($fields_used{'user'} && $data{'user'} ne "") {
-                    my $uid = (getpwnam($data{'user'}))[2];
-                    my $gid = (lstat($file))[5];
-                    print "'$File' set user to '$data{'user'}'\n" if $argv{'verbose'};
-                    if ($uid) {
-                        if (!$argv{'noexec'}) {
-                            if (! -l $file) { $check = chown($uid, $gid, $file); }
-                            else {
-                                my $cmd = join(" ", ("chown", "-h", escapeshellarg($data{'user'}), escapeshellarg("./$file"), "2>&1"));
-                                qx[$cmd]; $check = ($? == 0);
-                            }
-                        }
-                        else { $check = 1; }
-                        warn "warn: '$File' cannot set user to '$data{'user'}'\n" if !$check;
-                        last set_user if $check;
-                    }
-                    else {
-                        warn "warn: $data{'user'} is not a valid user.\n";
-                    }
-                }
-                if ($fields_used{'uid'} && $data{'uid'} ne "") {
-                    my $uid = $data{'uid'};
-                    my $gid = (lstat($file))[5];
-                    print "'$File' set uid to '$uid'\n" if $argv{'verbose'};
-                    if (!$argv{'noexec'}) {
-                        if (! -l $file) { $check = chown($uid, $gid, $file); }
-                        else {
-                            my $cmd = join(" ", ("chown", "-h", escapeshellarg($uid), escapeshellarg("./$file"), "2>&1"));
-                            qx[$cmd]; $check = ($? == 0);
-                        }
-                    }
-                    else { $check = 1; }
-                    warn "warn: '$File' cannot set uid to '$uid'\n" if !$check;
-                }
-            }
-            set_group: {
-                if ($fields_used{'group'} && $data{'group'} ne "") {
-                    my $uid = (lstat($file))[4];
-                    my $gid = (getgrnam($data{'group'}))[2];
-                    print "'$File' set group to '$data{'group'}'\n" if $argv{'verbose'};
-                    if ($gid) {
-                        if (!$argv{'noexec'}) {
-                            if (! -l $file) { $check = chown($uid, $gid, $file); }
-                            else {
-                                my $cmd = join(" ", ("chgrp", "-h", escapeshellarg($data{'group'}), escapeshellarg("./$file"), "2>&1"));
-                                qx[$cmd]; $check = ($? == 0);
-                            }
-                        }
-                        else { $check = 1; }
-                        warn "warn: '$File' cannot set group to '$data{'group'}'\n" if !$check;
-                        last set_group if $check;
-                    }
-                    else {
-                        warn "warn: $data{'group'} is not a valid user group.\n";
-                    }
-                }
-                if ($fields_used{'gid'} && $data{'gid'} ne "") {
-                    my $uid = (lstat($file))[4];
-                    my $gid = $data{'gid'};
-                    print "'$File' set gid to '$gid'\n" if $argv{'verbose'};
-                    if (!$argv{'noexec'}) {
-                        if (! -l $file) { $check = chown($uid, $gid, $file); }
-                        else {
-                            my $cmd = join(" ", ("chgrp", "-h", escapeshellarg($gid), escapeshellarg("./$file"), "2>&1"));
-                            qx[$cmd]; $check = ($? == 0);
-                        }
-                    }
-                    else { $check = 1; }
-                    warn "warn: '$File' cannot set gid to '$gid'\n" if !$check;
-                }
-            }
-            if ($fields_used{'mode'} && $data{'mode'} ne "" && ! -l $file) {
-                my $mode = oct($data{'mode'}) & 07777;
-                print "'$File' set mode to '$data{'mode'}'\n" if $argv{'verbose'};
-                $check = !$argv{'noexec'} ? chmod($mode, $file) : 1;
-                warn "warn: '$File' cannot set mode to '$data{'mode'}'\n" if !$check;
-            }
-            if ($fields_used{'acl'} && $data{'acl'} ne "") {
-                print "'$File' set acl to '$data{'acl'}'\n" if $argv{'verbose'};
-                if (!$argv{'noexec'}) {
-                    my $cmd = join(" ", ("setfacl", "-bm", escapeshellarg($data{'acl'}), escapeshellarg("./$file"), "2>&1"));
-                    qx[$cmd]; $check = ($? == 0);
-                }
-                else { $check = 1; }
-                warn "warn: '$File' cannot set acl to '$data{'acl'}'\n" if !$check;
-            }
-            if ($fields_used{'mtime'} && $data{'mtime'} ne "") {
-                my $mtime = gmtime_to_timestamp($data{'mtime'});
-                my $atime = (lstat($file))[8];
-                print "'$File' set mtime to '$data{'mtime'}'\n" if $argv{'verbose'};
-                if (!$argv{'noexec'}) {
-                    if (! -l $file) { $check = utime($atime, $mtime, $file); }
-                    else {
-                        my $cmd = join(" ", ("touch", "-hcmd", escapeshellarg($data{'mtime'}), escapeshellarg("./$file"), "2>&1"));
-                        qx[$cmd]; $check = ($? == 0);
-                    }
-                }
-                else { $check = 1; }
-                warn "warn: '$File' cannot set mtime to '$data{'mtime'}'\n" if !$check;
-            }
-            if ($fields_used{'atime'} && $data{'atime'} ne "") {
-                my $mtime = (lstat($file))[9];
-                my $atime = gmtime_to_timestamp($data{'atime'});
-                print "'$File' set atime to '$data{'atime'}'\n" if $argv{'verbose'};
-                if (!$argv{'noexec'}) {
-                    if (! -l $file) { $check = utime($atime, $mtime, $file); }
-                    else {
-                        my $cmd = join(" ", ("touch", "-hcad", escapeshellarg($data{'atime'}), escapeshellarg("./$file"), "2>&1"));
-                        qx[$cmd]; $check = ($? == 0);
-                    }
-                }
-                else { $check = 1; }
-                warn "warn: '$File' cannot set atime to '$data{'atime'}'\n" if !$check;
-            }
+      # check for existence and type
+      my $File = $data{'file'};  # Escaped version, for printing.  
+      my $file = unescape_filename($File);  # Unescaped version, for using.  
+      if (! -e $file && ! -l $file) {
+      # -e tests symlink target instead of the symlink itself
+        warn "warn: '${File}' does not exist, skip applying metadata\n";
+        next;
+      }
+      my $type = $data{'type'};
+      # a symlink in git could be checked out as a plain file, ...
+      # ... simply see them as equal
+      if ($type eq "f" || $type eq "l" ) {
+        if (! -f $file && ! -l $file) {
+          warn "warn: '${File}' is not a file, skip applying metadata\n";
+          next;
         }
-        close(GIT_STORE_META_FILE);
+      }
+      elsif ($type eq "d") {
+        if (! -d $file) {
+          warn "warn: '${File}' is not a directory, skip applying metadata\n";
+          next;
+        }
+        if (!$argv{'directory'}) {
+          next;
+        }
+      }
+      else {
+        warn "warn: '${File}' is recorded as an unknown type, skip applying metadata\n";
+        next;
+      }
+
+      # apply metadata
+      my $check = 0;
+      set_user: {
+        if ($fields_used{'user'} && $data{'user'} ne "") {
+          my $uid = (getpwnam($data{'user'}))[2];
+          my $gid = (lstat($file))[5];
+          if ($argv{'verbose'}) {
+            print "'${File}' set user to '$data{'user'}'\n" ;
+          }
+          if ($uid) {
+            if (!$argv{'noexec'}) {
+              if (! -l $file) {
+                $check = chown($uid, $gid, $file);
+              }
+              else {
+                my $cmd =
+                  join(" ", ("chown", "-h", escapeshellarg($data{'user'}),
+                             escapeshellarg("./$file"), "2>&1"));
+                qx[$cmd]; $check = ($? == 0);
+              }
+            }
+            else { $check = 1; }
+            if (!$check) {
+              warn "warn: '${File}' cannot set user to '$data{'user'}'\n";
+            }
+            last set_user if $check;
+          }
+          else {
+            warn "warn: $data{'user'} is not a valid user.\n";
+          }
+        }
+        if ($fields_used{'uid'} && $data{'uid'} ne "") {
+          my $uid = $data{'uid'};
+          my $gid = (lstat($file))[5];
+          print "'${File}' set uid to '$uid'\n" if $argv{'verbose'};
+          if (!$argv{'noexec'}) {
+            if (! -l $file) { $check = chown($uid, $gid, $file); }
+            else {
+              my $cmd =
+                join(" ", ("chown", "-h", escapeshellarg($uid),
+                           escapeshellarg("./$file"), "2>&1"));
+              qx[$cmd]; $check = ($? == 0);
+            }
+          }
+          else { $check = 1; }
+            warn "warn: '${File}' cannot set uid to '$uid'\n" if !$check;
+        }
+      }
+      set_group: {
+        if ($fields_used{'group'} && $data{'group'} ne "") {
+          my $uid = (lstat($file))[4];
+          my $gid = (getgrnam($data{'group'}))[2];
+          print "'${File}' set group to '$data{'group'}'\n" if $argv{'verbose'};
+          if ($gid) {
+            if (!$argv{'noexec'}) {
+              if (! -l $file) { $check = chown($uid, $gid, $file); }
+              else {
+                my $cmd =
+                  join(" ", ("chgrp", "-h", escapeshellarg($data{'group'}),
+                             escapeshellarg("./$file"), "2>&1"));
+                qx[$cmd]; $check = ($? == 0);
+              }
+            }
+            else { $check = 1; }
+            if (!$check) {
+              warn "warn: '${File}' cannot set group to '$data{'group'}'\n";
+            }
+            last set_group if $check;
+          }
+          else { warn "warn: $data{'group'} is not a valid user group.\n"; }
+        }
+        if ($fields_used{'gid'} && $data{'gid'} ne "") {
+          my $uid = (lstat($file))[4];
+          my $gid = $data{'gid'};
+          print "'${File}' set gid to '$gid'\n" if $argv{'verbose'};
+          if (!$argv{'noexec'}) {
+            if (! -l $file) { $check = chown($uid, $gid, $file); }
+            else {
+              my $cmd =
+                join(" ", ("chgrp", "-h", escapeshellarg($gid),
+                           escapeshellarg("./$file"), "2>&1"));
+              qx[$cmd]; $check = ($? == 0);
+            }
+          }
+          else { $check = 1; }
+            warn "warn: '${File}' cannot set gid to '$gid'\n" if !$check;
+        }
+      }
+      if ($fields_used{'mode'} && $data{'mode'} ne "" && ! -l $file) {
+        my $mode = oct($data{'mode'}) & 07777;
+        print "'${File}' set mode to '$data{'mode'}'\n" if $argv{'verbose'};
+        $check = !$argv{'noexec'} ? chmod($mode, $file) : 1;
+        warn "warn: '${File}' cannot set mode to '$data{'mode'}'\n" if !$check;
+      }
+      if ($fields_used{'acl'} && $data{'acl'} ne "") {
+        print "'${File}' set acl to '$data{'acl'}'\n" if $argv{'verbose'};
+        if (!$argv{'noexec'}) {
+          my $cmd =
+            join(" ", ("setfacl", "-bm", escapeshellarg($data{'acl'}),
+                       escapeshellarg("./$file"), "2>&1"));
+          qx[$cmd]; $check = ($? == 0);
+        }
+        else { $check = 1; }
+        warn "warn: '${File}' cannot set acl to '$data{'acl'}'\n" if !$check;
+      }
+      if ($fields_used{'mtime'} && $data{'mtime'} ne "") {
+        my $mtime = gmtime_to_timestamp($data{'mtime'});
+        my $atime = (lstat($file))[8];
+        print "'${File}' set mtime to '$data{'mtime'}'\n" if $argv{'verbose'};
+        if (!$argv{'noexec'}) {
+          if (! -l $file) { $check = utime($atime, $mtime, $file); }
+          else {
+            my $cmd =
+              join(" ", ("touch", "-hcmd", escapeshellarg($data{'mtime'}),
+                         escapeshellarg("./$file"), "2>&1"));
+            qx[$cmd]; $check = ($? == 0);
+          }
+        }
+        else { $check = 1; }
+        if (!$check) {
+          warn "warn: '${File}' cannot set mtime to '$data{'mtime'}'\n";
+        }
+      }
+      if ($fields_used{'atime'} && $data{'atime'} ne "") {
+        my $mtime = (lstat($file))[9];
+        my $atime = gmtime_to_timestamp($data{'atime'});
+        print "'${File}' set atime to '$data{'atime'}'\n" if $argv{'verbose'};
+        if (!$argv{'noexec'}) {
+          if (! -l $file) { $check = utime($atime, $mtime, $file); }
+          else {
+            my $cmd =
+              join(" ", ("touch", "-hcad", escapeshellarg($data{'atime'}),
+                         escapeshellarg("./$file"), "2>&1"));
+            qx[$cmd]; $check = ($? == 0);
+          }
+        }
+        else { $check = 1; }
+        if (!$check) {
+          warn "warn: '${File}' cannot set atime to '$data{'atime'}'\n";
+        }
+      }
     }
-    else {
-        die "error: current cache uses an unsupported schema of version: $version\n";
-    }
+    close(GIT_STORE_META_FILE);
+  }
 }
 
 # -----------------------------------------------------------------------------
@@ -553,7 +627,8 @@ sub main {
     $git_store_meta_file = $argv{'target'} if ($argv{'target'} ne "");
 
     # parse header
-    my ($cache_file_exist, $cache_file_accessible, $cache_header_valid, $app, $version, $cache_fields) = get_cache_header_info($git_store_meta_file);
+    my ($cache_file_exist, $cache_file_accessible, $cache_header_valid, $app,
+        $version, $cache_fields) = get_cache_header_info($git_store_meta_file);
     my @cache_fields = @{$cache_fields};
 
     # parse fields list
@@ -585,102 +660,131 @@ sub main {
             push(@fields, $parts[$i]);
         }
     }
-    my $field_info = "fields: " . join(", ", @fields) . "; directory: " . ($argv{'directory'} ? "yes" : "no") . "\n";
+    my $field_info = "fields: " . join(", ", @fields) . "; directory: " .
+                     ($argv{'directory'} ? "yes" : "no") . "\n";
 
     # run action
-    # priority: help > update > store > action if multiple assigned
+    # priority if multiple assigned:  help > update > store > apply 
     # update must go before store etc. since there's a special assign before
     my $action = "";
-    for ('help', 'update', 'store', 'apply') { if ($argv{$_}) { $action = $_; last; } }
+    for ('help', 'update', 'store', 'apply') {
+      if ($argv{$_}) { $action = $_; last; }
+    }
     if ($action eq "help") {
         usage();
     }
     elsif ($action eq "store") {
-        print "storing metadata to $git_store_meta_file ...\n";
+        if (!$argv{'quiet'}) {
+          print "Storing metadata to ${git_store_meta_file} ...\n";
+        }
         # validate
         if (!defined($topdir) || $topdir) {
-            die "error: please switch current working directory to the top level of a git working tree.\n";
+          my_exit "Error:  please switch current working directory to the top level of a Git working tree.\n";
         }
         # do the store
-        print $field_info;
+        print $field_info if (!$argv{'quiet'});
         if (!$argv{'noexec'}) {
-            open(GIT_STORE_META_FILE, '>', $git_store_meta_file) or die;
+            open(GIT_STORE_META_FILE, '>', $git_store_meta_file) or my_exit(
+              "Unable to open file '${git_store_meta_file}' for writing for --store.\n");
             select(GIT_STORE_META_FILE);
             store(\@fields);
             close(GIT_STORE_META_FILE);
             select(STDOUT);
         }
+        elsif ($argv{'quiet'}) {
+          # If control gets here, then both 'quiet' and 'noexec' are true 
+          open(DEV_NULL, ">", "/dev/null") or my_exit(
+            "Unable to write to /dev/null.\n");
+          select(DEV_NULL);
+          store(\@fields);
+          close(DEV_NULL);
+          select(STDOUT);
+        }
         else {
+            # 'quiet' is false, but 'noexec' is true 
             store(\@fields);
         }
     }
     elsif ($action eq "update") {
-        print "updating metadata to $git_store_meta_file ...\n";
-        # validate
-        if (!defined($topdir) || $topdir) {
-            die "error: please switch current working directory to the top level of a git working tree.\n";
-        }
-        if (!$cache_file_exist) {
-            die "error: $git_store_meta_file doesn't exist.\nRun --store to create new.\n";
-        }
-        if (!$cache_file_accessible) {
-            die "unable to access $git_store_meta_file.\n";
-        }
-        if ($app ne $GIT_STORE_META_APP) {
-            die "error: $git_store_meta_file is using another schema: $app $version\nRun --store to create new.\n";
-        }
-        if (!($version =~ m!^1\.2\..+$! || $version =~ m!^1\.1\..+$!)) {
-            die "error: current cache uses an unsupported schema of version: $version\n";
-        }
-        if (!$cache_header_valid) {
-            die "$git_store_meta_file is malformatted.\nFix it or run --store to create new.\n";
-        }
-        # do the update
-        print $field_info;
-        # copy the cache file to the temp file
-        # to prevent a conflict in further operation
-        open(GIT_STORE_META_FILE, "<", $git_store_meta_file) or die;
-        open(TEMP_FILE, ">", $temp_file) or die;
-        my $count = 0;
-        while (<GIT_STORE_META_FILE>) {
-            if (++$count <= 2) { next; }  # discard first 2 lines
-            print TEMP_FILE;
-        }
-        close(TEMP_FILE);
+      if (!argv{'quiet'}) {
+        print "Updating metadata to '${git_store_meta_file}' ...\n";
+      }
+      # validate
+      if (!defined($topdir) || $topdir) {
+        my_exit "Error:  please switch current working directory to the top level of a Git working tree.\n";
+      }
+      if (!$cache_file_exist) {
+        my_exit "Error:  '${git_store_meta_file}' doesn't exist.
+Run --store to create new.\n";
+      }
+      if (!$cache_file_accessible) {
+        my_exit "Error:  unable to access '${git_store_meta_file}'.\n";
+      }
+      if ($app ne $GIT_STORE_META_APP) {
+        my_exit "Error:  '${git_store_meta_file}' is using another schema: $app $version
+Run --store to create new.\n";
+      }
+      if (!($version =~ m!^1\.2\..+$! || $version =~ m!^1\.1\..+$!)) {
+        my_exit "Error:  current cache uses an unsupported schema, version $version\n";
+      }
+      if (!$cache_header_valid) {
+        my_exit "Error:  '${git_store_meta_file}' is malformatted.
+Fix it or run --store to create new.\n";
+      }
+      # do the update
+      print $field_info if (!argv{'quiet'});
+      # copy the cache file to the temp file
+      # to prevent a conflict in further operation
+      open(GIT_STORE_META_FILE, "<", $git_store_meta_file) or my_exit(
+        "Unable to open file '${git_store_meta_file}' for reading
+when copying to temporary file.\n");
+      open(TEMP_FILE, ">", $temp_file) or my_exit(
+        "Unable to open temporary file '${temp_file}' for writing for --update.\n");
+      my $count = 0;
+      while (<GIT_STORE_META_FILE>) {
+        if (++$count <= 2) { next; }  # discard first 2 lines
+        print TEMP_FILE;
+      }
+      close(TEMP_FILE);
+      close(GIT_STORE_META_FILE);
+      # update cache
+      if (!$argv{'noexec'}) {
+        open(GIT_STORE_META_FILE, '>', $git_store_meta_file) or my_exit(
+          "Unable to open file '${git_store_meta_file}' for writing for --update.\n");
+        select(GIT_STORE_META_FILE);
+        update(\@fields);
         close(GIT_STORE_META_FILE);
-        # update cache
-        if (!$argv{'noexec'}) {
-            open(GIT_STORE_META_FILE, '>', $git_store_meta_file) or die;
-            select(GIT_STORE_META_FILE);
-            update(\@fields);
-            close(GIT_STORE_META_FILE);
-            select(STDOUT);
-        }
-        else {
-            update(\@fields);
-        }
-        # clean up
-        my $clear = unlink($temp_file);
+        select(STDOUT);
+      }
+      else {
+        update(\@fields);
+      }
+      # clean up
+      my $clear = unlink($temp_file);
     }
     elsif ($action eq "apply") {
-        print "applying metadata from $git_store_meta_file ...\n";
-        # validate
-        if (!$cache_file_exist) {
-            print "$git_store_meta_file doesn't exist, skipped.\n";
-            exit;
+      if (!argv{'quiet'}) {
+        print "Applying metadata from '${git_store_meta_file}' ...\n";
+      }
+      # validate
+      if (!$cache_file_exist) {
+        if (!argv{'quiet'}) {
+          print "'${git_store_meta_file}' doesn't exist, skipped.\n";
         }
-        if (!$cache_file_accessible) {
-            die "unable to access $git_store_meta_file.\n";
-        }
-        if ($app ne $GIT_STORE_META_APP) {
-            die "error: unable to apply metadata using the schema: $app $version\n";
-        }
-        if (!$cache_header_valid) {
-            die "$git_store_meta_file is malformatted.\n";
-        }
-        # do the apply
-        print $field_info;
-        apply(\%fields_used, \@cache_fields, $version);
+        exit;
+      }
+      if (!$cache_file_accessible) {
+        my_exit "Error:  unable to access '${git_store_meta_file}'.\n";
+      }
+      if ($app ne $GIT_STORE_META_APP) {
+        my_exit "Error:  unable to apply metadata using the schema: ${app} ${version}\n";
+      }
+      if (!$cache_header_valid) {
+        my_exit "Error:  $'{git_store_meta_file}' is malformatted.\n";
+      }
+      # do the apply
+      print $field_info if (!argv{'quiet'});
+      apply(\%fields_used, \@cache_fields, $version);
     }
     else {
         usage();
