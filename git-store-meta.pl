@@ -2,28 +2,33 @@
 #
 # =============================================================================
 # Usage: git-store-meta.pl ACTION [OPTION...]
-# Store, update, or apply metadata for files revisioned by git. Switch CWD to
-# the top level of a git working tree before running this script.
+# Store, update, or apply metadata for files revisioned by Git. Switch CWD to
+# the top level of a Git working tree before running this script.
 #
 # ACTION is one of:
 #   -s, --store        store the metadata for all files
+#                      (Run --store on first use to initialize the metadata 
+#                      store file.)
 #   -u, --update       update the metadata for changed files
 #   -a, --apply        apply the metadata stored in the data file to CWD
 #   -h, --help         print this help and exit (not subject to -q option) 
 #
 # Available OPTIONs are:
-#   -f, --field FIELDS fields to store or apply (see below). Default is to pick
-#                      all fields in the current store file.
+#   -f, --field FIELDS fields to store or apply (see FIELDS list, below).  
+#                      Default is to pick all fields that are in the current 
+#                      store file.  When initializing the store file (first run 
+#                      of --store), the default is to use all fields that are 
+#                      in the FIELDS list below.  
 #   -d, --directory    also store, update, or apply for directories
 #   -n, --noexec       run a test and print the output, without real action
 #   -v, --verbose      apply with verbose output
-#   -q, --quiet        don't print anything on STDOUT 
-#       (given twice [such as -qq] = no STDERR either)
-#       (if both -v and -q are given, the one given last takes precedence) 
-#       (-n and -q can both be given, which might be used for testing) 
+#   -q, --quiet        don't print anything on STDOUT.  Given twice [such as 
+#                      -qq] = no STDERR either.  If both -v and -q are given, 
+#                      the one given last takes precedence.  Options -n and -q 
+#                      can both be given, which might be used for testing.  
 #   -t, --target FILE  set another data file path
 #
-# FIELDS is a comma separated string combined with below values:
+# FIELDS is a comma-separated string consisting of values from this list:
 #   mtime   last modified time
 #   atime   last access time
 #   mode    unix permissions
@@ -632,8 +637,6 @@ sub main {
     my @cache_fields = @{$cache_fields};
 
     # parse fields list
-    # use $argv{'field'} if defined, or use fields in the cache file
-    # special handling for --update, which must use fields in the cache file
     my %fields_used = (
         "file"  => 0,
         "type"  => 0,
@@ -647,20 +650,43 @@ sub main {
         "acl"   => 0,
     );
     my @fields;
-    my @parts;
-    if (!$argv{'field'} && $cache_header_valid || $argv{'update'}) {
-        @parts = @cache_fields;
+    # my @parts;  # See FIXME (below) for why this is commented out 
+    # First, put field names into @fields
+    #   Use $argv{'field'} if defined, or use fields in the cache file.  
+    # Special handling for --update, which must use fields in the cache file.  
+    # If none of those 3 cases, then select a default set of fields.  
+    # (The logic below isn't written in that order.)  
+    if ((!$argv{'field'} && $cache_header_valid) || $argv{'update'}) {
+      @fields = @cache_fields;
     }
     else {
-        push(@parts, ("file", "type"), split(/,\s*/, $argv{'field'}));
+      push(@fields, ("file", "type"))
+      if (!$argv{'field'}) {
+        # runs when $cache_header_valid is false (see enclosing "if")
+        foreach my $a_field ( keys %fields_used ) {
+          # Default to all fields.  
+          push(@fields, $a_field);
+        }
+      }
+      else {
+        push(@fields, split(/,\s*/, $argv{'field'}));
+      }
     }
-    for (my $i=0; $i<=$#parts; $i++) {
-        if (exists($fields_used{$parts[$i]}) && !$fields_used{$parts[$i]}) {
-            $fields_used{$parts[$i]} = 1;
-            push(@fields, $parts[$i]);
+    # Next, use @fields to update %fields_used 
+    for my $field (@fields) {
+        if (exists($fields_used{$field}) {  # && !$fields_used{$fields[$i]}){
+        # FIXME:  Apparently "&& !$fields_used{$fields[$i]}" isn't needed.  
+        # If it is needed, hopefully a comment can be added to explain it.  
+            $fields_used{$field]} = 1;
+            # push(@fields, $parts[$i]);
+            # FIXME:  Originally there was a separate array called @parts.  
+            # But this push() just set @fields equal to @parts, and this @parts 
+            # wasn't used after this.  (There is a *local* @parts in some of 
+            # the subroutines.)  So this main() now uses @fields for 
+            # everything.  Please re-instate @parts if needed!  
         }
     }
-    my $field_info = "fields: " . join(", ", @fields) . "; directory: " .
+    my $field_info = "fields: " . join(", ", @fields) . "; directories: " .
                      ($argv{'directory'} ? "yes" : "no") . "\n";
 
     # run action
