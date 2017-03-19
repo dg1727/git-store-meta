@@ -655,18 +655,31 @@ sub main {
     my @cache_fields = @{$cache_fields};
 
     # parse fields list
-    my %fields_used = (
-        "file"  => 0,
-        "type"  => 0,
-        "mtime" => 0,
-        "atime" => 0,
-        "mode"  => 0,
-        "uid"   => 0,
-        "gid"   => 0,
-        "user"  => 0,
-        "group" => 0,
-        "acl"   => 0,
+    my @selectable_fields = (
+        "mtime",
+        "atime",
+        "mode",
+        "uid",
+        "gid",
+        "user",
+        "group",
+        "acl",
     );
+    # The keys of hash %fields_used are defined as an array first, because 
+    # we'll need the array for initializing the metadata store file with the 
+    # default set of fields.  That latter initialization uses an array, rather 
+    # than a hash, so that the fields are always in the order given in the 
+    # code.  
+    #   The array is called @selectable_fields to contrast with some non-
+    # selectable fields (pointed out below) that are always at the start of the 
+    # records in the metadata store file.  
+
+    my %fields_used;
+    for my $field_name (@selectable_fields) {
+      $fields_used{$field_name} = 0;
+    }
+    # Initialize the hash.  
+
     my @fields;
     # my @parts;  # See FIXME (below) for why this is commented out 
     # First, put field names into @fields
@@ -679,9 +692,11 @@ sub main {
     }
     else {
       push(@fields, ("file", "type"));
+      # These are the "non-selectable fields" (see comment above).  
+
       if (!$argv{'field'}) {
         # runs when $cache_header_valid is false (see enclosing "if-else")
-        for my $a_field ( keys %fields_used ) {
+        for my $a_field (@selectable_fields) {
           # Default to all fields.  
           push(@fields, $a_field);
         }
@@ -717,9 +732,7 @@ sub main {
 
     # High-level actions (currently only --commit) 
     if ($action eq "commit") {
-      if ($cache_file_exist &&
-          $cache_file_accessible &&
-          $cache_header_valid) {
+      if ($cache_header_valid) {
         $action = "update";
       }
       else {
