@@ -7,7 +7,8 @@
 #
 # ACTION is one of:
 #   -c, --commit       Attempt --update; if metadata store file doesn't exist, 
-#                      then --update will fail, so do --store.  
+#                      then --update will fail, so do --store.  Either way, 
+#                      also "git add" the metadata file so it's in the commit.  
 #   -s, --store        Store the metadata for all files.  
 #                      (Run --store on first use to initialize the metadata 
 #                      store file.)
@@ -851,6 +852,16 @@ when copying to temporary file.\n");
     else {
         usage();
         exit 1;
+    }
+
+    # More code for high-level actions (currently only --commit) 
+    if ($argv{'commit'}) {
+      # That logic may need to be changed if more high-level-actions are added 
+      # in the future!  
+
+      (system($GIT, "add", escape_filename($git_store_meta_file)) == 0) or
+        my_exit("Error when running 'git add' on '$git_store_meta_file'.\n");
+      # escapeshellarg() does *not* work in place of escape_filename() here.  
     }
 }
 
