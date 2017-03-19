@@ -2,36 +2,46 @@
 #
 # =============================================================================
 # Usage: git-store-meta.pl ACTION [OPTION...]
-# Store, update, or apply metadata for files revisioned by Git. Switch CWD to
+# Store, update, or apply metadata for files revisioned by Git.  Switch CWD to
 # the top level of a Git working tree before running this script.
 #
 # ACTION is one of:
-#   -s, --store        store the metadata for all files
+#   -s, --store        Store the metadata for all files.  
 #                      (Run --store on first use to initialize the metadata 
 #                      store file.)
-#   -u, --update       update the metadata for changed files
-#   -a, --apply        apply the metadata stored in the data file to CWD
-#   -h, --help         print this help and exit (not subject to -q option) 
+#   -u, --update       Update the metadata for changed files.  
+#   -a, --apply        Apply the metadata stored in the data file to CWD.  
+#   -h, --help         Print this help and exit (not subject to -q option).  
 #
 # Available OPTIONs are:
-#   -f, --field FIELDS fields to store or apply (see FIELDS list, below).  
+#   -f, --field FIELDS Fields to store or apply (see FIELDS list, below).  
 #                      Default is to pick all fields that are in the current 
 #                      store file.  When initializing the store file (first run 
 #                      of --store), the default is to use all fields that are 
 #                      in the FIELDS list below.  
-#   -d, --directory    also store, update, or apply for directories
-#   -n, --noexec       run a test and print the output, without real action
-#   -v, --verbose      apply with verbose output
-#   -q, --quiet        don't print anything on STDOUT.  Given twice [such as 
-#                      -qq] = no STDERR either.  If both -v and -q are given, 
-#                      the one given last takes precedence.  Options -n and -q 
-#                      can both be given, which might be used for testing.  
-#   -t, --target FILE  set another data file path
+#   -d, --directory    (!) Also store, update, or apply for directories; on by 
+#                      default.  
+#       --noexec       Same as "--dry-run", below.  "--noexec" is deprecated 
+#                      and may be removed in the future.  
+#   -n, --dry-run      (!) Run a test and print the output, without real 
+#                      action.  
+#   -v, --verbose      (!) Verbose output (currently for the --apply action 
+#                      only).  
+#   -q, --quiet        (!) Don't print anything on STDOUT.  Given twice [such 
+#                      as -qq] = no STDERR either.  If both -v and -q are 
+#                      given, the one given last takes precedence.  Options -n 
+#                      and -q can both be given, which might be used for 
+#                      testing.  
+#   -t, --target FILE  Set another data file path.  
+#
+# Long OPTIONs marked with (!) may be negated with --no or --no- (for example, 
+# --nodirectory), but there isn't a one-letter (short) version to negate them.  
+#   Negating --verbose or --quiet resets the output to default verbosity.  
 #
 # FIELDS is a comma-separated string consisting of values from this list:
 #   mtime   last modified time
 #   atime   last access time
-#   mode    unix permissions
+#   mode    Unix permissions
 #   user    user name
 #   group   group name
 #   uid     user id (if user is also set, attempt to apply user first, and then
@@ -48,9 +58,8 @@
 # =============================================================================
 
 use utf8;
-use warnings;
 use strict;
-use diagnostics;
+# use diagnostics;  # useful for debugging syntax errors 
 
 use Getopt::Long;
 Getopt::Long::Configure qw(gnu_getopt);
@@ -81,8 +90,8 @@ my %argv = (
     "apply"      => 0,
     "help"       => 0,
     "field"      => "",
-    "directory"  => 0,
-    "noexec"     => 0,
+    "directory"  => 1,
+    "dry-run"    => 0,
     "verbose"    => 0,
     "quiet"      => 0,
     "target"     => "",
@@ -93,11 +102,14 @@ GetOptions(
     "apply|a",      \$argv{'apply'},
     "help|h",       \$argv{'help'},
     "field|f=s",    \$argv{'field'},
-    "directory|d",  \$argv{'directory'},
-    "noexec|n",     \$argv{'noexec'},
+    "directory|d!", \$argv{'directory'},
+    "noexec",       \$argv{'dry-run'}, # disallow --nonoexec, --no-noexec 
+    "dry-run|n!",   \$argv{'dry-run'},
     "verbose|v",    sub{ $argv{'verbose'} = 1; $argv{'quiet'} = 0; },
     "quiet|q",      sub{ if($argv{'quiet'} < 2) {$argv{'quiet'}++};
                          $argv{'verbose'} = 0; },
+    "noverbose|no-verbose|noquiet|no-quiet",
+                    sub{ $argv{'verbose'} = 0; $argv{'quiet'} = 0; },
     "target|t=s",   \$argv{'target'},
 );
 
@@ -491,7 +503,7 @@ sub apply {
             print "'${File}' set user to '$data{'user'}'\n" ;
           }
           if ($uid) {
-            if (!$argv{'noexec'}) {
+            if (!$argv{'dry-run'}) {
               if (! -l $file) {
                 $check = chown($uid, $gid, $file);
               }
@@ -516,7 +528,7 @@ sub apply {
           my $uid = $data{'uid'};
           my $gid = (lstat($file))[5];
           print "'${File}' set uid to '$uid'\n" if $argv{'verbose'};
-          if (!$argv{'noexec'}) {
+          if (!$argv{'dry-run'}) {
             if (! -l $file) { $check = chown($uid, $gid, $file); }
             else {
               my $cmd =
@@ -535,7 +547,7 @@ sub apply {
           my $gid = (getgrnam($data{'group'}))[2];
           print "'${File}' set group to '$data{'group'}'\n" if $argv{'verbose'};
           if ($gid) {
-            if (!$argv{'noexec'}) {
+            if (!$argv{'dry-run'}) {
               if (! -l $file) { $check = chown($uid, $gid, $file); }
               else {
                 my $cmd =
@@ -556,7 +568,7 @@ sub apply {
           my $uid = (lstat($file))[4];
           my $gid = $data{'gid'};
           print "'${File}' set gid to '$gid'\n" if $argv{'verbose'};
-          if (!$argv{'noexec'}) {
+          if (!$argv{'dry-run'}) {
             if (! -l $file) { $check = chown($uid, $gid, $file); }
             else {
               my $cmd =
@@ -572,12 +584,12 @@ sub apply {
       if ($fields_used{'mode'} && $data{'mode'} ne "" && ! -l $file) {
         my $mode = oct($data{'mode'}) & 07777;
         print "'${File}' set mode to '$data{'mode'}'\n" if $argv{'verbose'};
-        $check = !$argv{'noexec'} ? chmod($mode, $file) : 1;
+        $check = !$argv{'dry-run'} ? chmod($mode, $file) : 1;
         warn "warn: '${File}' cannot set mode to '$data{'mode'}'\n" if !$check;
       }
       if ($fields_used{'acl'} && $data{'acl'} ne "") {
         print "'${File}' set acl to '$data{'acl'}'\n" if $argv{'verbose'};
-        if (!$argv{'noexec'}) {
+        if (!$argv{'dry-run'}) {
           my $cmd =
             join(" ", ("setfacl", "-bm", escapeshellarg($data{'acl'}),
                        escapeshellarg("./$file"), "2>&1"));
@@ -590,7 +602,7 @@ sub apply {
         my $mtime = gmtime_to_timestamp($data{'mtime'});
         my $atime = (lstat($file))[8];
         print "'${File}' set mtime to '$data{'mtime'}'\n" if $argv{'verbose'};
-        if (!$argv{'noexec'}) {
+        if (!$argv{'dry-run'}) {
           if (! -l $file) { $check = utime($atime, $mtime, $file); }
           else {
             my $cmd =
@@ -608,7 +620,7 @@ sub apply {
         my $mtime = (lstat($file))[9];
         my $atime = gmtime_to_timestamp($data{'atime'});
         print "'${File}' set atime to '$data{'atime'}'\n" if $argv{'verbose'};
-        if (!$argv{'noexec'}) {
+        if (!$argv{'dry-run'}) {
           if (! -l $file) { $check = utime($atime, $mtime, $file); }
           else {
             my $cmd =
@@ -711,7 +723,7 @@ sub main {
         }
         # do the store
         print $field_info if (!$argv{'quiet'});
-        if (!$argv{'noexec'}) {
+        if (!$argv{'dry-run'}) {
             open(GIT_STORE_META_FILE, '>', $git_store_meta_file) or my_exit(
               "Unable to open file '${git_store_meta_file}' for writing for --store.\n");
             select(GIT_STORE_META_FILE);
@@ -720,7 +732,7 @@ sub main {
             select(STDOUT);
         }
         elsif ($argv{'quiet'}) {
-          # If control gets here, then both 'quiet' and 'noexec' are true 
+          # If control gets here, then both 'quiet' and 'dry-run' are true 
           open(DEV_NULL, ">", "/dev/null") or my_exit(
             "Unable to write to /dev/null.\n");
           select(DEV_NULL);
@@ -729,7 +741,7 @@ sub main {
           select(STDOUT);
         }
         else {
-            # 'quiet' is false, but 'noexec' is true 
+            # 'quiet' is false, but 'dry-run' is true 
             store(\@fields);
         }
     }
@@ -776,7 +788,7 @@ when copying to temporary file.\n");
       close(TEMP_FILE);
       close(GIT_STORE_META_FILE);
       # update cache
-      if (!$argv{'noexec'}) {
+      if (!$argv{'dry-run'}) {
         open(GIT_STORE_META_FILE, '>', $git_store_meta_file) or my_exit(
           "Unable to open file '${git_store_meta_file}' for writing for --update.\n");
         select(GIT_STORE_META_FILE);
