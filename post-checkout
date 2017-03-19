@@ -7,5 +7,5 @@ change_br=$3
 
 # apply metadata only when the HEAD is changed
 if [ ${sha_new} != ${sha_old} ]; then
-    perl $(dirname "$0")/git-store-meta.pl --apply -d
+    perl $(dirname "$0")/git-store-meta.pl --apply
 fi

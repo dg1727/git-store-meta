@@ -2,8 +2,7 @@
 # when running the hook, cwd is the top level of working tree
 
 # update (or store if failed)
-perl $(dirname "$0")/git-store-meta.pl --update ||
-perl $(dirname "$0")/git-store-meta.pl --store ||
+perl $(dirname "$0")/git-store-meta.pl --commit ||
 exit 1
 
 # remember to add the updated cache file

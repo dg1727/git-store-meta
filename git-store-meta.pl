@@ -6,6 +6,8 @@
 # the top level of a Git working tree before running this script.
 #
 # ACTION is one of:
+#   -c, --commit       Attempt --update; if metadata store file doesn't exist, 
+#                      then --update will fail, so do --store.  
 #   -s, --store        Store the metadata for all files.  
 #                      (Run --store on first use to initialize the metadata 
 #                      store file.)
@@ -85,6 +87,7 @@ my $temp_file = $git_store_meta_file . ".tmp" . time;
 
 # parse arguments
 my %argv = (
+    "commit"     => 0,
     "store"      => 0,
     "update"     => 0,
     "apply"      => 0,
@@ -97,6 +100,7 @@ my %argv = (
     "target"     => "",
 );
 GetOptions(
+    "commit|c",     \$argv{'commit'},
     "store|s",      \$argv{'store'},
     "update|u",     \$argv{'update'},
     "apply|a",      \$argv{'apply'},
@@ -676,7 +680,7 @@ sub main {
     else {
       push(@fields, ("file", "type"));
       if (!$argv{'field'}) {
-        # runs when $cache_header_valid is false (see enclosing "if")
+        # runs when $cache_header_valid is false (see enclosing "if-else")
         for my $a_field ( keys %fields_used ) {
           # Default to all fields.  
           push(@fields, $a_field);
@@ -703,13 +707,27 @@ sub main {
     my $field_info = "fields: " . join(", ", @fields) . "; directories: " .
                      ($argv{'directory'} ? "yes" : "no") . "\n";
 
-    # run action
-    # priority if multiple assigned:  help > update > store > apply 
-    # update must go before store etc. since there's a special assign before
+    # Select an action.  
+    # Priority if multiple assigned:  help > commit > update > store > apply 
+    # Update must go before store etc. since there's a special assign before
     my $action = "";
-    for ('help', 'update', 'store', 'apply') {
+    for ('help', 'commit', 'update', 'store', 'apply') {
       if ($argv{$_}) { $action = $_; last; }
     }
+
+    # High-level actions (currently only --commit) 
+    if ($action eq "commit") {
+      if ($cache_file_exist &&
+          $cache_file_accessible &&
+          $cache_header_valid) {
+        $action = "update";
+      }
+      else {
+        $action = "store";
+      }
+    }
+
+    # Run the selected action.  
     if ($action eq "help") {
         usage();
     }
