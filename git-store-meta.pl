@@ -681,7 +681,6 @@ sub main {
     # Initialize the hash.  
 
     my @fields;
-    # my @parts;  # See FIXME (below) for why this is commented out 
     # First, put field names into @fields
     #   Use $argv{'field'} if defined, or use fields in the cache file.  
     # Special handling for --update, which must use fields in the cache file.  
@@ -707,16 +706,8 @@ sub main {
     }
     # Next, use @fields to update %fields_used 
     for my $field (@fields) {
-        if (exists($fields_used{$field})) {  # && !$fields_used{$fields[$i]}){
-        # FIXME:  Apparently "&& !$fields_used{$fields[$i]}" isn't needed.  
-        # If it is needed, hopefully a comment can be added to explain it.  
+        if (exists($fields_used{$field})) {
             $fields_used{$field} = 1;
-            # push(@fields, $parts[$i]);
-            # FIXME:  Originally there was a separate array called @parts.  
-            # But this push() just set @fields equal to @parts, and this @parts 
-            # wasn't used after this.  (There is a *local* @parts in some of 
-            # the subroutines.)  So this main() now uses @fields for 
-            # everything.  Please re-instate @parts if needed!  
         }
     }
     my $field_info = "fields: " . join(", ", @fields) . "; directories: " .
