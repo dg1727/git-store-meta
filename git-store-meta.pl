@@ -1,7 +1,7 @@
 #!/usr/bin/perl -w
 #
 # =============================================================================
-# Usage: git-store-meta.pl ACTION [OPTION...]
+# Usage:  git-store-meta.pl ACTION [OPTION...]
 # Store, update, or apply metadata for files revisioned by Git.  Switch CWD to
 # the top level of a Git working tree before running this script.
 #
@@ -36,7 +36,7 @@
 #
 # Long OPTIONs marked with (!) may be negated with --no or --no- (for example, 
 # --nodirectory), but there isn't a one-letter (short) version to negate them.  
-#   Negating --verbose or --quiet resets the output to default verbosity.  
+# Negating --verbose or --quiet resets the output to default verbosity.  
 #
 # FIELDS is a comma-separated string consisting of values from this list:
 #   mtime   last modified time
@@ -51,7 +51,7 @@
 #   acl     access control lists for setfacl/getfacl
 #
 # git-store-meta 1.2.1
-# Copyright (c) 2015-2016, Danny Lin
+# Copyright (c) 2015-2017, Danny Lin
 # Released under MIT License
 # Project home: http://github.com/danny0838/git-store-meta
 #
