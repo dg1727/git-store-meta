@@ -18,10 +18,10 @@
 #
 # Available OPTIONs are:
 #   -f, --field FIELDS Fields to store or apply (see FIELDS list, below).  
-#                      Default is to pick all fields that are in the current 
-#                      store file.  When initializing the store file (first run 
-#                      of --store), the default is to use all fields that are 
-#                      in the FIELDS list below.  
+#                      If a metadata store file exists, then the default is to 
+#                      pick all fields that are in the current store file.  Or 
+#                      when initializing the store file (first run of --store), 
+#                      the default is "mtime".  
 #   -d, --directory    (!) Also store, update, or apply for directories; on by 
 #                      default.  
 #       --noexec       Same as "--dry-run", below.  "--noexec" is deprecated 
@@ -660,17 +660,20 @@ sub main {
         "mtime",
         "atime",
         "mode",
-        "uid",
-        "gid",
         "user",
         "group",
+        "uid",
+        "gid",
         "acl",
     );
-    # The keys of hash %fields_used are defined as an array first, because 
-    # we'll need the array for initializing the metadata store file with the 
-    # default set of fields.  That latter initialization uses an array, rather 
-    # than a hash, so that the fields are always in the order given in the 
-    # code.  
+    # The keys of hash %fields_used are defined as an array first, because we 
+    # briefly tried to use the array for initializing the metadata store file 
+    # to contain all fields.  That latter initialization used an array, rather 
+    # than a hash, so that the fields were always in the order given in the 
+    # code.  Since then, we decided to initialize with an explicit constant 
+    # subset of fields because many of the above fields don't make sense for a 
+    # default case; but the array is still in the code in case a later version 
+    # will use it.  
     #   The array is called @selectable_fields to contrast with some non-
     # selectable fields (pointed out below) that are always at the start of the 
     # records in the metadata store file.  
@@ -696,10 +699,8 @@ sub main {
 
       if (!$argv{'field'}) {
         # runs when $cache_header_valid is false (see enclosing "if-else")
-        for my $a_field (@selectable_fields) {
-          # Default to all fields.  
-          push(@fields, $a_field);
-        }
+        push(@fields, "mtime");
+        # Default to storing the mtime.  
       }
       else {
         push(@fields, split(/,\s*/, $argv{'field'}));
@@ -711,7 +712,7 @@ sub main {
             $fields_used{$field} = 1;
         }
     }
-    my $field_info = "fields: " . join(", ", @fields) . "; directories: " .
+    my $field_info = "Fields: " . join(", ", @fields) . "; Directories: " .
                      ($argv{'directory'} ? "yes" : "no") . "\n";
 
     # Select an action.  
